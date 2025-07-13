@@ -1,0 +1,7 @@
+# This file lists the Python dependencies for the project.
+Flask
+gunicorn
+yt-dlp
+youtube-transcript-api
+requests
+google-genai

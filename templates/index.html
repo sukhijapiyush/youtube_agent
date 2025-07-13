@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Content Enricher</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f8fafc;
+    }
+
+    .playlist-videos {
+      max-height: 0;
+      transition: max-height 0.5s ease-in-out;
+    }
+
+    .toast {
+      transition: all 0.3s ease;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  {% raw %}
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef, StrictMode } = React;
+
+    // --- Helper Components ---
+    const Icon = ({ name, className }) => {
+      const icons = {
+        logo: <path d="M15.5,1h-7A6.5,6.5,0,0,0,2,7.5v7A6.5,6.5,0,0,0,8.5,21h7A6.5,6.5,0,0,0,22,14.5v-7A6.5,6.5,0,0,0,15.5,1Zm-5,15a5,5,0,1,1,5-5A5,5,0,0,1,10.5,16Zm6-6.5A1.5,1.5,0,1,1,18,8,1.5,1.5,0,0,1,16.5,9.5Z" />,
+        edit: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L16.732 3.732z" />,
+        delete: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />,
+        reprocess: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M4 4l5 5M20 20l-5-5" />,
+        playlist: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2H5a2 2 0 00-2 2v2m14 0h-2m-2 0h-4m-2 0H5" />,
+        chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />,
+        close: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />,
+        library: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />,
+        batch: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14v6m-3-3h6M3 10h11M3 6h11M3 14h8M3 18h11" />,
+      };
+      return <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">{icons[name]}</svg>;
+    };
+
+    const Toast = ({ message, type, onDismiss }) => {
+      useEffect(() => {
+        const timer = setTimeout(onDismiss, 3000);
+        return () => clearTimeout(timer);
+      }, [onDismiss]);
+      const bgColor = type === 'success' ? 'bg-green-600' : 'bg-red-600';
+      return <div className={`toast animate-fade-in-up w-full max-w-sm p-4 rounded-lg shadow-lg text-white ${bgColor}`}>{message}</div>;
+    };
+
+    const Dialog = ({ open, onClose, title, children, size = 'md' }) => {
+      if (!open) return null;
+      const sizeClasses = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl' };
+      return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className={`bg-white rounded-lg shadow-xl w-full p-6 ${sizeClasses[size]}`} onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold truncate pr-4">{title}</h2>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><Icon name="close" className="w-6 h-6" /></button>
+            </div>
+            {children}
+          </div>
+        </div>
+      );
+    };
+
+    const EditContentDialog = ({ open, onClose, video, onUpdate }) => {
+      const [name, setName] = useState('');
+      const [uploader, setUploader] = useState('');
+      const [category, setCategory] = useState('');
+      const [summary, setSummary] = useState('');
+      const [tags, setTags] = useState('');
+
+      useEffect(() => {
+        if (video) {
+          setName(video.name || '');
+          setUploader(video.uploader || '');
+          setCategory(video.category || '');
+          setSummary(video.summary || '');
+          setTags(video.tags || '');
+        }
+      }, [video]);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        onUpdate(video.id, { name, uploader, category, summary, tags });
+      };
+
+      if (!video) return null;
+
+      return (
+        <Dialog open={open} onClose={onClose} title="Edit Video Details">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Title</label><input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Uploader</label><input type="text" value={uploader} onChange={e => setUploader(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Category</label><input type="text" value={category} onChange={e => setCategory(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+            </div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Summary</label><textarea value={summary} onChange={e => setSummary(e.target.value)} rows="4" className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Tags (comma-separated)</label><input type="text" value={tags} onChange={e => setTags(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+            <div className="flex justify-end mt-6"><button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700">Save Changes</button></div>
+          </form>
+        </Dialog>
+      );
+    };
+
+    const VideoPlayerDialog = ({ open, onClose, video }) => {
+      if (!open || !video) return null;
+      let videoId = null;
+      try {
+        const url = new URL(video.url);
+        if (url.hostname === 'youtu.be') videoId = url.pathname.slice(1);
+        else videoId = url.searchParams.get('v');
+      } catch (e) { console.error("Invalid video URL", e); }
+      const embedUrl = videoId ? `https://www.youtube.com/embed/${videoId}?autoplay=1` : null;
+      return <Dialog open={open} onClose={onClose} title={video.name} size="3xl">{embedUrl ? <div className="aspect-video w-full bg-black"><iframe src={embedUrl} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full"></iframe></div> : <p>Could not load video player.</p>}</Dialog>;
+    };
+
+    // --- Card Components ---
+    const VideoCard = ({ video, onEdit, onDelete, onView, onReprocess }) => (
+      <div className="bg-white rounded-lg shadow-md flex items-start space-x-4 p-4 hover:shadow-xl transition-shadow">
+        <img src={video.thumbnail_url || 'https://placehold.co/160x90'} className="w-40 h-24 object-cover rounded-md flex-shrink-0 cursor-pointer" onClick={() => onView(video)} />
+        <div className="flex-grow overflow-hidden">
+          <h4 className="font-semibold text-base cursor-pointer hover:text-indigo-600" title={video.name} onClick={() => onView(video)}>{video.name}</h4>
+          <div className="flex items-center space-x-2 text-sm text-gray-500 my-1.5"><span>by {video.uploader || 'Unknown'}</span>{video.category && <span className="font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">{video.category}</span>}</div>
+          <p className="text-sm text-gray-600 mb-3">{video.summary || 'No summary.'}</p>
+          <div className="flex flex-wrap items-center gap-2">{video.tags && video.tags.split(',').map((tag, index) => <span key={`${tag.trim()}-${index}`} className="text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full">{tag.trim()}</span>)}</div>
+        </div>
+        <div className="flex flex-col space-y-1 ml-2 flex-shrink-0">
+          <button onClick={() => onReprocess(video.url)} title="Reprocess" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="reprocess" className="w-5 h-5 text-gray-500" /></button>
+          <button onClick={() => onEdit(video)} title="Edit" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="edit" className="w-5 h-5 text-gray-500" /></button>
+          <button onClick={() => onDelete(video.id)} title="Delete" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="delete" className="w-5 h-5 text-gray-500" /></button>
+        </div>
+      </div>
+    );
+
+    const PlaylistCard = ({ playlist, onEdit, onDeletePlaylist, onDeleteVideo, onView, onReprocess }) => {
+      const [isOpen, setIsOpen] = useState(false);
+      const contentRef = useRef(null);
+      return (
+        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+          <div className="p-4 flex justify-between items-center cursor-pointer hover:bg-gray-50" onClick={() => setIsOpen(!isOpen)}>
+            <div className="flex items-center space-x-4"><Icon name="playlist" className="w-8 h-8 text-indigo-500" /><h3 className="font-bold text-xl">{playlist.title}</h3></div>
+            <div className="flex items-center space-x-2"><p className="text-sm text-gray-500">{playlist.video_count} videos</p><button onClick={(e) => { e.stopPropagation(); onReprocess(playlist.url); }} title="Reprocess Playlist" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="reprocess" className="w-5 h-5 text-gray-500" /></button><button onClick={(e) => { e.stopPropagation(); onDeletePlaylist(playlist.id); }} title="Delete Playlist" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="delete" className="w-5 h-5 text-gray-500" /></button><Icon name="chevronDown" className={`w-6 h-6 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} /></div>
+          </div>
+          <div ref={contentRef} className="playlist-videos overflow-hidden" style={{ maxHeight: isOpen ? `${contentRef.current.scrollHeight}px` : '0' }}><div className="p-4 space-y-3 border-t">{playlist.videos.map(video => <VideoCard key={video.id} video={video} onEdit={onEdit} onDelete={onDeleteVideo} onView={onView} onReprocess={onReprocess} />)}</div></div>
+        </div>
+      );
+    };
+
+    const BatchView = ({ isProcessing, onStartBatch, addToast, onReprocessAll }) => {
+      const [links, setLinks] = useState([]);
+      const [newLinks, setNewLinks] = useState('');
+      const [from, setFrom] = useState(1);
+      const [to, setTo] = useState(10);
+      const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+      const fetchBatchLinks = useCallback(async () => {
+        const res = await fetch('/api/batch/links');
+        setLinks(await res.json());
+      }, []);
+
+      useEffect(() => { fetchBatchLinks(); }, [refreshTrigger]);
+
+      const unprocessedLinks = links.filter(link => !link.processed);
+
+      const handleStart = () => {
+        const startIdx = Math.max(0, from - 1);
+        const endIdx = Math.min(unprocessedLinks.length, to);
+        const urlsToProcess = unprocessedLinks.slice(startIdx, endIdx).map(l => l.url);
+        if (urlsToProcess.length > 0) {
+          onStartBatch(urlsToProcess);
+        }
+      };
+
+      const handleAddLinks = async () => {
+        if (!newLinks.trim()) return;
+        const res = await fetch('/api/batch/add_links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ links: newLinks })
+        });
+        if (res.ok) {
+          addToast('Links added to batch file successfully!');
+          setNewLinks('');
+          setRefreshTrigger(c => c + 1);
+        } else {
+          addToast('Failed to add links to file.', 'error');
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="bg-white p-4 rounded-lg shadow-sm">
+            <h3 className="font-bold text-lg mb-2">Run Batch Job</h3>
+            <p className="text-sm text-gray-600 mb-4">Process a range of links from your `batch_links.txt` file.</p>
+            <div className="flex items-center space-x-2">
+              <label>From:</label><input type="number" value={from} onChange={e => setFrom(parseInt(e.target.value))} className="w-20 p-2 border rounded-md" min="1" />
+              <label>To:</label><input type="number" value={to} onChange={e => setTo(parseInt(e.target.value))} className="w-20 p-2 border rounded-md" min="1" />
+              <button onClick={handleStart} disabled={isProcessing || unprocessedLinks.length === 0} className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:bg-indigo-300">
+                Run Batch ({unprocessedLinks.length} remaining)
+              </button>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow-sm">
+            <h3 className="font-bold text-lg mb-2">Add Links to Batch File</h3>
+            <textarea value={newLinks} onChange={e => setNewLinks(e.target.value)} className="w-full p-2 border rounded-md" rows="5" placeholder="Paste one or more YouTube URLs here, one per line." />
+            <button onClick={handleAddLinks} disabled={isProcessing} className="mt-2 px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:bg-green-300">Add to File</button>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow-sm">
+            <h3 className="font-bold text-lg mb-2">Global Actions</h3>
+            <button onClick={onReprocessAll} disabled={isProcessing} className="px-4 py-2 bg-yellow-500 text-white rounded-md text-sm font-medium hover:bg-yellow-600 disabled:bg-yellow-300">
+              Reprocess All Library Items
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // --- Main App Component ---
+    function App() {
+      const [library, setLibrary] = useState([]);
+      const [actionInput, setActionInput] = useState('');
+      const [editingVideo, setEditingVideo] = useState(null);
+      const [viewingVideo, setViewingVideo] = useState(null);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [logs, setLogs] = useState([]);
+      const [toasts, setToasts] = useState([]);
+      const [activeView, setActiveView] = useState('library');
+      const [batchRefreshTrigger, setBatchRefreshTrigger] = useState(0);
+
+      const addToast = useCallback((message, type = 'success') => { const id = Date.now(); setToasts(prev => [...prev, { id, message, type }]); }, []);
+      const removeToast = useCallback((id) => { setToasts(prev => prev.filter(t => t.id !== id)); }, []);
+
+      const handleAddContent = useCallback(async (urls) => {
+        if (!urls || urls.length === 0) return;
+        const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls }) });
+        if (res.ok) { addToast("Enrichment process started!"); setIsProcessing(true); startLogStream(); }
+        else { const err = await res.json(); addToast(err.error || "Failed to start.", "error"); }
+      }, [addToast]);
+
+      const fetchLibrary = useCallback(async () => {
+        try { const res = await fetch('/api/library'); setLibrary(await res.json()); }
+        catch (error) { addToast("Could not load library.", "error"); }
+      }, [addToast]);
+
+      const startLogStream = useCallback(() => {
+        setLogs([]);
+        const eventSource = new EventSource('/stream-logs');
+        eventSource.onmessage = (event) => {
+          if (event.data === "__STREAM_END__") {
+            eventSource.close();
+            setIsProcessing(false);
+            addToast("Enrichment finished!");
+            fetchLibrary();
+            setBatchRefreshTrigger(c => c + 1);
+          }
+          else { setLogs(prev => [...prev, event.data]); }
+        };
+        eventSource.onerror = () => eventSource.close();
+      }, [addToast, fetchLibrary]);
+
+      useEffect(() => {
+        const checkStatus = async () => {
+          const res = await fetch('/api/status');
+          if ((await res.json()).is_running) { setIsProcessing(true); startLogStream(); }
+        };
+        fetchLibrary();
+        checkStatus();
+      }, [fetchLibrary, startLogStream]);
+
+      const handleDeleteVideo = async (id) => { if (confirm("Delete this video?")) { await fetch(`/api/videos/${id}`, { method: 'DELETE' }); addToast("Video deleted.", "error"); fetchLibrary(); } };
+      const handleDeletePlaylist = async (id) => { if (confirm("Delete this playlist and all videos?")) { await fetch(`/api/playlists/${id}`, { method: 'DELETE' }); addToast("Playlist deleted.", "error"); fetchLibrary(); } };
+      const handleUpdateVideo = async (id, updatedData) => { await fetch(`/api/videos/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedData) }); addToast('Video updated!'); setEditingVideo(null); fetchLibrary(); };
+
+      const handleReprocess = (url) => { if (confirm("Re-processing will overwrite existing data. Are you sure?")) { handleAddContent([url]); } };
+      const handleReprocessAll = () => {
+        if (confirm(`This will re-process all ${library.length} items in your library. This may take a long time. Are you sure?`)) {
+          const allUrls = library.map(item => item.url);
+          handleAddContent(allUrls);
+        }
+      };
+
+      const handleActionSubmit = (e) => {
+        e.preventDefault();
+        const youtubeRegex = /(?:youtube\.com|youtu\.be)/;
+        if (youtubeRegex.test(actionInput)) { handleAddContent([actionInput]); setActionInput(''); }
+      };
+
+      const filteredLibrary = library.filter(item => {
+        const query = actionInput.toLowerCase();
+        if (!query || /(?:youtube\.com|youtu\.be)/.test(query)) return true;
+        if (item.type === 'playlist') return item.title.toLowerCase().includes(query) || item.videos.some(v => v.name.toLowerCase().includes(query));
+        return item.name.toLowerCase().includes(query) || (item.summary && item.summary.toLowerCase().includes(query)) || (item.tags && item.tags.toLowerCase().includes(query));
+      });
+
+      return (
+        <>
+          <div className="flex h-screen">
+            <aside className="w-64 bg-white border-r border-gray-200 p-6 flex-col hidden lg:flex">
+              <div className="flex items-center space-x-2 mb-8"><Icon name="logo" className="w-8 h-8 text-indigo-600 fill-current" /><h1 className="text-xl font-bold">Content Enricher</h1></div>
+              <nav className="space-y-1">
+                <button onClick={() => setActiveView('library')} className={`w-full flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium ${activeView === 'library' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-600 hover:bg-gray-50'}`}><Icon name="library" className="w-6 h-6" /><span>My Library</span></button>
+                <button onClick={() => setActiveView('batch')} className={`w-full flex items-center space-x-3 px-3 py-2 rounded-md text-sm font-medium ${activeView === 'batch' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-600 hover:bg-gray-50'}`}><Icon name="batch" className="w-6 h-6" /><span>Batch Processing</span></button>
+              </nav>
+            </aside>
+
+            <div className="flex-1 flex flex-col">
+              <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200 sticky top-0 z-10">
+                <div className="max-w-6xl mx-auto p-4">
+                  <div className="lg:hidden flex justify-between items-center mb-4">
+                    <div className="flex items-center space-x-2"><Icon name="logo" className="w-8 h-8 text-indigo-600 fill-current" /><h1 className="text-xl font-bold">Content Enricher</h1></div>
+                  </div>
+                  <form onSubmit={handleActionSubmit}>
+                    <input type="text" placeholder="Paste a YouTube link to enrich, or type to search..." value={actionInput} onChange={e => setActionInput(e.target.value)} className="w-full px-4 py-3 text-lg border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" disabled={isProcessing} />
+                  </form>
+                  <nav className="lg:hidden flex justify-around mt-4 border-t pt-2">
+                    <button onClick={() => setActiveView('library')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'library' ? 'text-indigo-700' : 'text-gray-600'}`}>My Library</button>
+                    <button onClick={() => setActiveView('batch')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'batch' ? 'text-indigo-700' : 'text-gray-600'}`}>Batch Processing</button>
+                  </nav>
+                </div>
+              </header>
+
+              <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+                <div className="max-w-6xl mx-auto">
+                  {isProcessing && (<div className="mb-6 bg-gray-800 text-white font-mono text-sm rounded-lg p-4"><h3 className="font-semibold mb-2">Enrichment Log</h3><div className="max-h-40 overflow-y-auto bg-black/25 p-2 rounded">{logs.map((log, i) => <p key={i}>{log}</p>)}</div></div>)}
+
+                  {activeView === 'library' && (
+                    <div className="space-y-6">
+                      {filteredLibrary.length > 0 ? (
+                        filteredLibrary.map(item => item.type === 'playlist'
+                          ? <PlaylistCard key={`p-${item.id}`} playlist={item} onView={setViewingVideo} onEdit={setEditingVideo} onDeletePlaylist={handleDeletePlaylist} onDeleteVideo={handleDeleteVideo} onReprocess={handleReprocess} />
+                          : <VideoCard key={`v-${item.id}`} video={item} onView={setViewingVideo} onEdit={setEditingVideo} onDelete={handleDeleteVideo} onReprocess={handleReprocess} />
+                        )
+                      ) : (<div className="text-center py-16"><h3 className="text-lg text-gray-600">No content found.</h3></div>)}
+                    </div>
+                  )}
+
+                  {activeView === 'batch' && <BatchView isProcessing={isProcessing} onStartBatch={handleAddContent} addToast={addToast} onReprocessAll={handleReprocessAll} />}
+                </div>
+              </main>
+            </div>
+          </div>
+
+          <EditContentDialog open={!!editingVideo} onClose={() => setEditingVideo(null)} video={editingVideo} onUpdate={handleUpdateVideo} />
+          <VideoPlayerDialog open={!!viewingVideo} onClose={() => setViewingVideo(null)} video={viewingVideo} />
+
+          <div className="fixed bottom-5 right-5 z-50 space-y-3 w-full max-w-sm">
+            {toasts.map(toast => <Toast key={toast.id} {...toast} onDismiss={() => removeToast(toast.id)} />)}
+          </div>
+        </>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<StrictMode><App /></StrictMode>);
+  </script>
+  {% endraw %}
+</body>
+
+</html>
