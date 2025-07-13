@@ -19,6 +19,7 @@ import time
 import random
 from constants import API_KEY
 import re
+import os
 
 
 class VideoData(BaseModel):
@@ -104,9 +105,18 @@ def save_video_to_db(
 
 # --- Core Functions ---
 def get_video_transcript(video_id: str) -> str:
-    print(f"    - Sub-step 3.1: Fetching transcript...", flush=True)
-    language_codes = ["en", "hi"]
+    """
+    Fetches transcript. First tries youtube_transcript_api, falls back to yt-dlp.
+    """
+    print(
+        f"    - Sub-step 3.1: Fetching transcript for video ID: {video_id}...",
+        flush=True,
+    )
+
+    # --- Primary Method: youtube-transcript-api ---
     try:
+        print("      -> Attempting transcript fetch with primary API...", flush=True)
+        language_codes = ["en", "hi"]
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         transcript = None
         try:
@@ -122,35 +132,90 @@ def get_video_transcript(video_id: str) -> str:
                 "      -> No manual transcript found. Checking for auto-generated...",
                 flush=True,
             )
-            try:
-                transcript = transcript_list.find_generated_transcript(language_codes)
+            transcript = transcript_list.find_generated_transcript(language_codes)
+            print(
+                f"      -> Found auto-generated transcript in '{transcript.language_code}'.",
+                flush=True,
+            )
+
+        formatter = TextFormatter()
+        text = formatter.format_transcript(transcript.fetch())
+        print(
+            "      -> Transcript fetched and formatted successfully via API.",
+            flush=True,
+        )
+        return text
+    except Exception as api_error:
+        print(
+            f"      -> Primary transcript API failed: {api_error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(f"      -> Attempting fallback using yt-dlp...", flush=True)
+
+        # --- Fallback Method: yt-dlp ---
+        try:
+            ydl_opts = {
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitleslangs": ["en", "hi"],
+                "skip_download": True,
+                "outtmpl": f"{video_id}",  # Use video_id for predictable filename
+                "subtitlesformat": "ttml",
+                "quiet": True,
+                "noplaylist": True,
+            }
+
+            with YoutubeDL(ydl_opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+
+            subtitle_file = None
+            for lang in ["en", "hi"]:
+                potential_file = f"{video_id}.{lang}.ttml"
+                if os.path.exists(potential_file):
+                    subtitle_file = potential_file
+                    break
+
+            if not subtitle_file:
                 print(
-                    f"      -> Found auto-generated transcript in '{transcript.language_code}'.",
-                    flush=True,
-                )
-            except NoTranscriptFound:
-                print(
-                    "      -> No transcript found in English or Hindi.",
+                    "      -> yt-dlp fallback failed: No subtitle file was downloaded.",
                     file=sys.stderr,
                     flush=True,
                 )
                 return ""
-        if transcript:
-            formatter = TextFormatter()
-            text = formatter.format_transcript(transcript.fetch())
-            print("      -> Transcript fetched and formatted successfully.", flush=True)
-            return text
-        return ""
-    except TranscriptsDisabled:
-        print(
-            f"      -> INFO: Transcripts are disabled for this video.",
-            file=sys.stderr,
-            flush=True,
-        )
-        return ""
-    except Exception as e:
-        print(f"      -> ERROR fetching transcript: {e}", file=sys.stderr, flush=True)
-        return ""
+
+            print(f"      -> Found subtitle file: {subtitle_file}", flush=True)
+            with open(subtitle_file, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            os.remove(subtitle_file)
+
+            text_parts = re.findall(r">([^<]+)</p>", content)
+            full_transcript = " ".join(
+                part.strip().replace("\n", " ") for part in text_parts
+            )
+
+            if full_transcript:
+                print(
+                    "      -> Transcript extracted successfully via yt-dlp fallback.",
+                    flush=True,
+                )
+                return full_transcript
+            else:
+                print(
+                    "      -> yt-dlp fallback: File was downloaded but no text could be extracted.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return ""
+
+        except Exception as ydl_error:
+            print(
+                f"      -> yt-dlp fallback also failed: {ydl_error}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return ""
 
 
 def get_enriched_data_from_gemini(
