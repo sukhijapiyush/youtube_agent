@@ -341,7 +341,7 @@ def process_video(video_info: dict, ai_model: str) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url")
-    parser.add_argument("--model", default="gemini-2.50-flash")
+    parser.add_argument("--model", default="gemini-2.5-flash")
     args = parser.parse_args()
 
     ai_model = args.model
