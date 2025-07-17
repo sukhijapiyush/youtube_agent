@@ -89,7 +89,6 @@ def run_enrichment_process(urls):
                 log_queue.put(line.strip())
             process.stdout.close()
             process.wait()
-            time.sleep(60)
     except Exception as e:
         log_queue.put(f"FATAL: A subprocess failed: {e}")
     finally:

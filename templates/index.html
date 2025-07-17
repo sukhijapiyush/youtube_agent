@@ -24,6 +24,12 @@
     .toast {
       transition: all 0.3s ease;
     }
+
+    .drop-zone-active {
+      outline: 2px dashed #4f46e5;
+      outline-offset: -10px;
+      background-color: #e0e7ff;
+    }
   </style>
 </head>
 
@@ -32,7 +38,7 @@
 
   {% raw %}
   <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef, StrictMode } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef, StrictMode } = React;
 
     // --- Helper Components ---
     const Icon = ({ name, className }) => {
@@ -46,6 +52,7 @@
         close: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />,
         library: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />,
         batch: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14v6m-3-3h6M3 10h11M3 6h11M3 14h8M3 18h11" />,
+        link: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />,
       };
       return <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">{icons[name]}</svg>;
     };
@@ -61,15 +68,17 @@
 
     const Dialog = ({ open, onClose, title, children, size = 'md' }) => {
       if (!open) return null;
-      const sizeClasses = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl' };
+      const sizeClasses = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', screen: 'w-[95vw] h-[95vh]' };
       return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-          <div className={`bg-white rounded-lg shadow-xl w-full p-6 ${sizeClasses[size]}`} onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className={`bg-white rounded-lg shadow-xl w-full flex flex-col ${sizeClasses[size]}`} onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center p-4 border-b border-gray-200 flex-shrink-0">
               <h2 className="text-xl font-semibold truncate pr-4">{title}</h2>
               <button onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><Icon name="close" className="w-6 h-6" /></button>
             </div>
-            {children}
+            <div className="flex-grow overflow-auto p-6">
+              {children}
+            </div>
           </div>
         </div>
       );
@@ -124,18 +133,24 @@
         else videoId = url.searchParams.get('v');
       } catch (e) { console.error("Invalid video URL", e); }
       const embedUrl = videoId ? `https://www.youtube.com/embed/${videoId}?autoplay=1` : null;
-      return <Dialog open={open} onClose={onClose} title={video.name} size="3xl">{embedUrl ? <div className="aspect-video w-full bg-black"><iframe src={embedUrl} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full"></iframe></div> : <p>Could not load video player.</p>}</Dialog>;
+      return <Dialog open={open} onClose={onClose} title={video.name} size="screen">{embedUrl ? <div className="w-full h-full bg-black -m-6 mt-0"><iframe src={embedUrl} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full"></iframe></div> : <p>Could not load video player.</p>}</Dialog>;
     };
 
     // --- Card Components ---
     const VideoCard = ({ video, onEdit, onDelete, onView, onReprocess }) => (
       <div className="bg-white rounded-lg shadow-md flex items-start space-x-4 p-4 hover:shadow-xl transition-shadow">
-        <img src={video.thumbnail_url || 'https://placehold.co/160x90'} className="w-40 h-24 object-cover rounded-md flex-shrink-0 cursor-pointer" onClick={() => onView(video)} />
+        {video.type === 'webpage' ? (
+          <div className="w-40 h-24 bg-gray-100 rounded-md flex-shrink-0 flex items-center justify-center">
+            <Icon name="link" className="w-12 h-12 text-gray-400" />
+          </div>
+        ) : (
+          <img src={video.thumbnail_url || 'https://placehold.co/160x90'} className="w-40 h-24 object-cover rounded-md flex-shrink-0 cursor-pointer" onClick={() => onView(video)} />
+        )}
         <div className="flex-grow overflow-hidden">
-          <h4 className="font-semibold text-base cursor-pointer hover:text-indigo-600" title={video.name} onClick={() => onView(video)}>{video.name}</h4>
-          <div className="flex items-center space-x-2 text-sm text-gray-500 my-1.5"><span>by {video.uploader || 'Unknown'}</span>{video.category && <span className="font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">{video.category}</span>}</div>
+          <a href={video.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-base cursor-pointer hover:text-indigo-600" title={video.name}>{video.name}</a>
+          <div className="flex items-center space-x-2 text-sm text-gray-500 my-1.5"><span>by {video.uploader || 'Webpage'}</span>{video.category && <span className="font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">{video.category}</span>}</div>
           <p className="text-sm text-gray-600 mb-3">{video.summary || 'No summary.'}</p>
-          <div className="flex flex-wrap items-center gap-2">{video.tags && video.tags.split(',').map((tag, index) => <span key={`${tag.trim()}-${index}`} className="text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full">{tag.trim()}</span>)}</div>
+          <div className="flex flex-wrap items-center gap-2">{video.tags && video.tags.split(',').map((tag, index) => <span key={`${video.id}-${tag.trim()}-${index}`} className="text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full">{tag.trim()}</span>)}</div>
         </div>
         <div className="flex flex-col space-y-1 ml-2 flex-shrink-0">
           <button onClick={() => onReprocess(video.url)} title="Reprocess" className="p-1.5 rounded-full hover:bg-gray-200"><Icon name="reprocess" className="w-5 h-5 text-gray-500" /></button>
@@ -159,75 +174,6 @@
       );
     };
 
-    const BatchView = ({ isProcessing, onStartBatch, addToast, onReprocessAll }) => {
-      const [links, setLinks] = useState([]);
-      const [newLinks, setNewLinks] = useState('');
-      const [from, setFrom] = useState(1);
-      const [to, setTo] = useState(10);
-      const [refreshTrigger, setRefreshTrigger] = useState(0);
-
-      const fetchBatchLinks = useCallback(async () => {
-        const res = await fetch('/api/batch/links');
-        setLinks(await res.json());
-      }, []);
-
-      useEffect(() => { fetchBatchLinks(); }, [refreshTrigger]);
-
-      const unprocessedLinks = links.filter(link => !link.processed);
-
-      const handleStart = () => {
-        const startIdx = Math.max(0, from - 1);
-        const endIdx = Math.min(unprocessedLinks.length, to);
-        const urlsToProcess = unprocessedLinks.slice(startIdx, endIdx).map(l => l.url);
-        if (urlsToProcess.length > 0) {
-          onStartBatch(urlsToProcess);
-        }
-      };
-
-      const handleAddLinks = async () => {
-        if (!newLinks.trim()) return;
-        const res = await fetch('/api/batch/add_links', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ links: newLinks })
-        });
-        if (res.ok) {
-          addToast('Links added to batch file successfully!');
-          setNewLinks('');
-          setRefreshTrigger(c => c + 1);
-        } else {
-          addToast('Failed to add links to file.', 'error');
-        }
-      };
-
-      return (
-        <div className="space-y-6">
-          <div className="bg-white p-4 rounded-lg shadow-sm">
-            <h3 className="font-bold text-lg mb-2">Run Batch Job</h3>
-            <p className="text-sm text-gray-600 mb-4">Process a range of links from your `batch_links.txt` file.</p>
-            <div className="flex items-center space-x-2">
-              <label>From:</label><input type="number" value={from} onChange={e => setFrom(parseInt(e.target.value))} className="w-20 p-2 border rounded-md" min="1" />
-              <label>To:</label><input type="number" value={to} onChange={e => setTo(parseInt(e.target.value))} className="w-20 p-2 border rounded-md" min="1" />
-              <button onClick={handleStart} disabled={isProcessing || unprocessedLinks.length === 0} className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:bg-indigo-300">
-                Run Batch ({unprocessedLinks.length} remaining)
-              </button>
-            </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-sm">
-            <h3 className="font-bold text-lg mb-2">Add Links to Batch File</h3>
-            <textarea value={newLinks} onChange={e => setNewLinks(e.target.value)} className="w-full p-2 border rounded-md" rows="5" placeholder="Paste one or more YouTube URLs here, one per line." />
-            <button onClick={handleAddLinks} disabled={isProcessing} className="mt-2 px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:bg-green-300">Add to File</button>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-sm">
-            <h3 className="font-bold text-lg mb-2">Global Actions</h3>
-            <button onClick={onReprocessAll} disabled={isProcessing} className="px-4 py-2 bg-yellow-500 text-white rounded-md text-sm font-medium hover:bg-yellow-600 disabled:bg-yellow-300">
-              Reprocess All Library Items
-            </button>
-          </div>
-        </div>
-      );
-    };
-
     // --- Main App Component ---
     function App() {
       const [library, setLibrary] = useState([]);
@@ -239,6 +185,9 @@
       const [toasts, setToasts] = useState([]);
       const [activeView, setActiveView] = useState('library');
       const [batchRefreshTrigger, setBatchRefreshTrigger] = useState(0);
+      const [sortOrder, setSortOrder] = useState('processed_at_desc');
+      const [activeCategory, setActiveCategory] = useState('All');
+      const [isDragging, setIsDragging] = useState(false);
 
       const addToast = useCallback((message, type = 'success') => { const id = Date.now(); setToasts(prev => [...prev, { id, message, type }]); }, []);
       const removeToast = useCallback((id) => { setToasts(prev => prev.filter(t => t.id !== id)); }, []);
@@ -280,6 +229,20 @@
         checkStatus();
       }, [fetchLibrary, startLogStream]);
 
+      const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+      const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+      const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const url = e.dataTransfer.getData('text/plain');
+        try {
+          new URL(url);
+          handleAddContent([url]);
+        } catch (_) {
+          addToast("Invalid drop: Please drop a valid URL.", "error");
+        }
+      };
+
       const handleDeleteVideo = async (id) => { if (confirm("Delete this video?")) { await fetch(`/api/videos/${id}`, { method: 'DELETE' }); addToast("Video deleted.", "error"); fetchLibrary(); } };
       const handleDeletePlaylist = async (id) => { if (confirm("Delete this playlist and all videos?")) { await fetch(`/api/playlists/${id}`, { method: 'DELETE' }); addToast("Playlist deleted.", "error"); fetchLibrary(); } };
       const handleUpdateVideo = async (id, updatedData) => { await fetch(`/api/videos/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedData) }); addToast('Video updated!'); setEditingVideo(null); fetchLibrary(); };
@@ -294,16 +257,56 @@
 
       const handleActionSubmit = (e) => {
         e.preventDefault();
-        const youtubeRegex = /(?:youtube\.com|youtu\.be)/;
-        if (youtubeRegex.test(actionInput)) { handleAddContent([actionInput]); setActionInput(''); }
+        try {
+          new URL(actionInput);
+          handleAddContent([actionInput]);
+          setActionInput('');
+        } catch (_) {
+          // Not a valid URL, so it's a search term. The filter will handle it.
+        }
       };
 
-      const filteredLibrary = library.filter(item => {
+      const categories = useMemo(() => {
+        const allItems = library.flatMap(item => item.type === 'playlist' ? item.videos : item);
+        const uniqueCategories = [...new Set(allItems.map(item => item.category).filter(Boolean))];
+        return ['All', ...uniqueCategories.sort()];
+      }, [library]);
+
+      const filteredAndSortedLibrary = useMemo(() => {
         const query = actionInput.toLowerCase();
-        if (!query || /(?:youtube\.com|youtu\.be)/.test(query)) return true;
-        if (item.type === 'playlist') return item.title.toLowerCase().includes(query) || item.videos.some(v => v.name.toLowerCase().includes(query));
-        return item.name.toLowerCase().includes(query) || (item.summary && item.summary.toLowerCase().includes(query)) || (item.tags && item.tags.toLowerCase().includes(query));
-      });
+        let isUrl = false;
+        try { new URL(actionInput); isUrl = true; } catch (_) { }
+
+        let items = library.filter(item => {
+          if (!query || isUrl) return true;
+          if (item.type === 'playlist') return item.title.toLowerCase().includes(query) || item.videos.some(v => v.name.toLowerCase().includes(query));
+          return item.name.toLowerCase().includes(query) || (item.summary && item.summary.toLowerCase().includes(query)) || (item.tags && item.tags.toLowerCase().includes(query));
+        });
+
+        if (activeCategory !== 'All') {
+          items = items.map(item => {
+            if (item.type === 'playlist') {
+              const filteredVideos = item.videos.filter(v => v.category === activeCategory);
+              return filteredVideos.length > 0 ? { ...item, videos: filteredVideos } : null;
+            }
+            return item.category === activeCategory ? item : null;
+          }).filter(Boolean);
+        }
+
+        const getItemDuration = (item) => {
+          if (item.type === 'playlist') return item.videos.reduce((acc, v) => acc + (v.duration || 0), 0);
+          return item.duration || 0;
+        };
+
+        return items.sort((a, b) => {
+          if (sortOrder === 'name_asc') return a.name.localeCompare(b.name);
+          if (sortOrder === 'name_desc') return b.name.localeCompare(a.name);
+          if (sortOrder === 'duration_asc') return getItemDuration(a) - getItemDuration(b);
+          if (sortOrder === 'duration_desc') return getItemDuration(b) - getItemDuration(a);
+          if (sortOrder === 'processed_at_asc') return new Date(a.processed_at) - new Date(b.processed_at);
+          return new Date(b.processed_at) - new Date(a.processed_at);
+        });
+      }, [library, actionInput, sortOrder, activeCategory]);
 
       return (
         <>
@@ -316,38 +319,36 @@
               </nav>
             </aside>
 
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
               <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200 sticky top-0 z-10">
                 <div className="max-w-6xl mx-auto p-4">
-                  <div className="lg:hidden flex justify-between items-center mb-4">
-                    <div className="flex items-center space-x-2"><Icon name="logo" className="w-8 h-8 text-indigo-600 fill-current" /><h1 className="text-xl font-bold">Content Enricher</h1></div>
+                  <div className="lg:hidden flex justify-between items-center mb-4"><div className="flex items-center space-x-2"><Icon name="logo" className="w-8 h-8 text-indigo-600 fill-current" /><h1 className="text-xl font-bold">Content Enricher</h1></div></div>
+                  <form onSubmit={handleActionSubmit}><input type="text" placeholder="Paste a URL to enrich, or type to search..." value={actionInput} onChange={e => setActionInput(e.target.value)} className="w-full px-4 py-3 text-lg border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" disabled={isProcessing} /></form>
+                  <nav className="lg:hidden flex justify-around mt-4 border-t pt-2"><button onClick={() => setActiveView('library')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'library' ? 'text-indigo-700' : 'text-gray-600'}`}>My Library</button><button onClick={() => setActiveView('batch')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'batch' ? 'text-indigo-700' : 'text-gray-600'}`}>Batch Processing</button></nav>
+                  <div className="flex items-center space-x-4 mt-4">
+                    <select onChange={e => setSortOrder(e.target.value)} value={sortOrder} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"><option value="processed_at_desc">Sort: Newest First</option><option value="processed_at_asc">Sort: Oldest First</option><option value="name_asc">Sort: Title (A-Z)</option><option value="name_desc">Sort: Title (Z-A)</option><option value="duration_desc">Sort: Duration (Longest)</option><option value="duration_asc">Sort: Duration (Shortest)</option></select>
+                    <select onChange={e => setActiveCategory(e.target.value)} value={activeCategory} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm">{categories.map(cat => <option key={cat} value={cat}>{cat === 'All' ? 'Filter by Category' : cat}</option>)}</select>
                   </div>
-                  <form onSubmit={handleActionSubmit}>
-                    <input type="text" placeholder="Paste a YouTube link to enrich, or type to search..." value={actionInput} onChange={e => setActionInput(e.target.value)} className="w-full px-4 py-3 text-lg border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" disabled={isProcessing} />
-                  </form>
-                  <nav className="lg:hidden flex justify-around mt-4 border-t pt-2">
-                    <button onClick={() => setActiveView('library')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'library' ? 'text-indigo-700' : 'text-gray-600'}`}>My Library</button>
-                    <button onClick={() => setActiveView('batch')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'batch' ? 'text-indigo-700' : 'text-gray-600'}`}>Batch Processing</button>
-                  </nav>
                 </div>
               </header>
 
-              <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <main className={`flex-1 overflow-y-auto p-4 sm:p-6 transition-all ${isDragging ? 'drop-zone-active' : ''}`}>
                 <div className="max-w-6xl mx-auto">
+                  {isDragging && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><div className="text-2xl font-bold text-indigo-600 bg-white/80 p-6 rounded-lg">Drop Link to Enrich</div></div>}
                   {isProcessing && (<div className="mb-6 bg-gray-800 text-white font-mono text-sm rounded-lg p-4"><h3 className="font-semibold mb-2">Enrichment Log</h3><div className="max-h-40 overflow-y-auto bg-black/25 p-2 rounded">{logs.map((log, i) => <p key={i}>{log}</p>)}</div></div>)}
 
                   {activeView === 'library' && (
                     <div className="space-y-6">
-                      {filteredLibrary.length > 0 ? (
-                        filteredLibrary.map(item => item.type === 'playlist'
-                          ? <PlaylistCard key={`p-${item.id}`} playlist={item} onView={setViewingVideo} onEdit={setEditingVideo} onDeletePlaylist={handleDeletePlaylist} onDeleteVideo={handleDeleteVideo} onReprocess={handleReprocess} />
-                          : <VideoCard key={`v-${item.id}`} video={item} onView={setViewingVideo} onEdit={setEditingVideo} onDelete={handleDeleteVideo} onReprocess={handleReprocess} />
-                        )
+                      {filteredAndSortedLibrary.length > 0 ? (
+                        filteredAndSortedLibrary.map(item => {
+                          if (item.type === 'playlist') return <PlaylistCard key={`p-${item.id}`} playlist={item} onView={setViewingVideo} onEdit={setEditingVideo} onDeletePlaylist={handleDeletePlaylist} onDeleteVideo={handleDeleteVideo} onReprocess={handleReprocess} />;
+                          return <VideoCard key={`v-${item.id}`} video={item} onView={setViewingVideo} onEdit={setEditingVideo} onDelete={handleDeleteVideo} onReprocess={handleReprocess} />;
+                        })
                       ) : (<div className="text-center py-16"><h3 className="text-lg text-gray-600">No content found.</h3></div>)}
                     </div>
                   )}
 
-                  {activeView === 'batch' && <BatchView isProcessing={isProcessing} onStartBatch={handleAddContent} addToast={addToast} onReprocessAll={handleReprocessAll} />}
+                  {activeView === 'batch' && <BatchView isProcessing={isProcessing} onStartBatch={handleAddContent} addToast={addToast} onReprocessAll={handleReprocessAll} library={library} refreshTrigger={batchRefreshTrigger} />}
                 </div>
               </main>
             </div>

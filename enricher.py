@@ -4,6 +4,8 @@ import sqlite3
 import sys
 import json
 from datetime import datetime
+import requests
+from bs4 import BeautifulSoup
 from yt_dlp import YoutubeDL
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
@@ -37,6 +39,10 @@ client = genai.Client(api_key=API_KEY)
 # # Configure generation settings
 # gen_config = types.GenerateContentConfig(tools=[grounding_tool])
 # gen_config.response_schema = VideoData
+
+gen_config = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_budget=4096)
+)
 
 
 # --- Database Functions ---
@@ -104,10 +110,13 @@ def save_video_to_db(
 
 
 # --- Core Functions ---
-def get_video_transcript(video_id: str) -> str:
+def get_video_transcript(video_id: str, video_info: dict) -> str:
     """
     Fetches transcript. First tries youtube_transcript_api, falls back to yt-dlp.
+    If using fallback, it prepends the video description to the transcript.
     """
+    video_id = video_info.get("id", "")
+    description = video_info.get("description", "")
     print(
         f"    - Sub-step 3.1: Fetching transcript for video ID: {video_id}...",
         flush=True,
@@ -116,35 +125,35 @@ def get_video_transcript(video_id: str) -> str:
     # --- Primary Method: youtube-transcript-api ---
     try:
         print("      -> Attempting transcript fetch with primary API...", flush=True)
-        language_codes = ["en", "hi"]
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(
-                language_codes
-            )
-            print(
-                f"      -> Found manually created transcript in '{transcript.language_code}'.",
-                flush=True,
-            )
-        except NoTranscriptFound:
-            print(
-                "      -> No manual transcript found. Checking for auto-generated...",
-                flush=True,
-            )
-            transcript = transcript_list.find_generated_transcript(language_codes)
-            print(
-                f"      -> Found auto-generated transcript in '{transcript.language_code}'.",
-                flush=True,
-            )
+    #     language_codes = ["en", "hi"]
+    #     transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+    #     transcript = None
+    #     try:
+    #         transcript = transcript_list.find_manually_created_transcript(
+    #             language_codes
+    #         )
+    #         print(
+    #             f"      -> Found manually created transcript in '{transcript.language_code}'.",
+    #             flush=True,
+    #         )
+    #     except NoTranscriptFound:
+    #         print(
+    #             "      -> No manual transcript found. Checking for auto-generated...",
+    #             flush=True,
+    #         )
+    #         transcript = transcript_list.find_generated_transcript(language_codes)
+    #         print(
+    #             f"      -> Found auto-generated transcript in '{transcript.language_code}'.",
+    #             flush=True,
+    #         )
 
-        formatter = TextFormatter()
-        text = formatter.format_transcript(transcript.fetch())
-        print(
-            "      -> Transcript fetched and formatted successfully via API.",
-            flush=True,
-        )
-        return text
+    #     formatter = TextFormatter()
+    #     text = formatter.format_transcript(transcript.fetch())
+    #     print(
+    #         "      -> Transcript fetched and formatted successfully via API.",
+    #         flush=True,
+    #     )
+    #     return text
     except Exception as api_error:
         print(
             f"      -> Primary transcript API failed: {api_error}",
@@ -200,11 +209,17 @@ def get_video_transcript(video_id: str) -> str:
                     "      -> Transcript extracted successfully via yt-dlp fallback.",
                     flush=True,
                 )
-                return full_transcript
+                # --- MODIFICATION: Prepend description to the transcript ---
+                return f"Video Description:\n{description}\n\nTranscript:\n{full_transcript}"
+            elif description:
+                print(
+                    "      -> No transcript found, but description is available. Returning description.",
+                    flush=True,
+                )
+                return f"Video Description:\n{description}\n\nTranscript: No transcript available."
             else:
                 print(
-                    "      -> yt-dlp fallback: File was downloaded but no text could be extracted.",
-                    file=sys.stderr,
+                    "      -> No transcript or description available.",
                     flush=True,
                 )
                 return ""
@@ -248,7 +263,7 @@ Video Content:
     try:
         response = client.models.generate_content(
             model=model_name,
-            # config=gen_config,
+            config=gen_config,
             contents=prompt,
         )
         print("Output Response", response.text)
@@ -319,7 +334,7 @@ def process_video(video_info: dict, ai_model: str) -> dict:
     print(f"PROCESSING_URL::{url}", flush=True)
     print(f"\nSTEP 3: Processing Video: '{title}'", flush=True)
 
-    transcript = get_video_transcript(video_id)
+    transcript = get_video_transcript(video_id, video_info)
     enriched_data = get_enriched_data_from_gemini(
         title, description, transcript, ai_model
     )
@@ -337,11 +352,51 @@ def process_video(video_info: dict, ai_model: str) -> dict:
     }
 
 
+def process_webpage(url: str, ai_model: str) -> dict:
+    print(f"PROCESSING_URL::{url}", flush=True)
+    print(f"\nSTEP 3: Processing Webpage: '{url}'", flush=True)
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        title = soup.title.string if soup.title else "No Title Found"
+
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        text = soup.get_text(separator=" ", strip=True)
+
+        enriched_data = get_enriched_data_from_gemini(
+            title, description="This is webpage", transcript=text, model_name=ai_model
+        )
+
+        return {
+            "name": title,
+            "url": url,
+            "type": "webpage",
+            "summary": enriched_data["summary"],
+            "tags": enriched_data["tags"],
+            "category": enriched_data["category"],
+            "thumbnail_url": None,
+            "uploader": None,
+            "duration": None,
+        }
+    except Exception as e:
+        print(f"ERROR processing webpage {url}: {e}", file=sys.stderr, flush=True)
+        return None
+
+
 # --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url")
-    parser.add_argument("--model", default="gemini-2.5-flash")
+    parser.add_argument("--model", default="gemini-2.5-flash-lite-preview-06-17")
     args = parser.parse_args()
 
     ai_model = args.model
@@ -352,94 +407,107 @@ def main():
 
     db_conn = setup_database()
     print(f"\nSTEP 2: Fetching metadata for URL: {args.url}", flush=True)
+    is_youtube_url = "youtube.com" in args.url or "youtu.be" in args.url
 
-    is_playlist = "playlist?list=" in args.url and "watch?v=" not in args.url
-
-    if is_playlist:
-        ydl_opts = {"quiet": True, "extract_flat": True}
-        print(" -> Playlist URL detected. Fetching playlist entries...", flush=True)
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(args.url, download=False)
-        except Exception as e:
-            print(
-                f"FATAL: yt-dlp failed to extract playlist info: {e}",
-                file=sys.stderr,
-                flush=True,
-            )
-            db_conn.close()
-            sys.exit(1)
-
-        playlist_title = info_dict.get("title", "Untitled Playlist")
-        playlist_url = info_dict.get("webpage_url")
-        playlist_uploader = info_dict.get("uploader")
-        video_count = info_dict.get("playlist_count")
-
-        cursor = db_conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO playlists (title, url, uploader, video_count, processed_at) VALUES (?, ?, ?, ?, ?)",
-            (
-                playlist_title,
-                playlist_url,
-                playlist_uploader,
-                video_count,
-                datetime.now(),
-            ),
-        )
-        db_conn.commit()
-        playlist_id = cursor.lastrowid
-        print(f" -> Created/Updated playlist entry with ID: {playlist_id}", flush=True)
-
-        video_entries = info_dict.get("entries", [])
-        for i, entry in enumerate(video_entries):
-            if i > 0:
-                time.sleep(random.uniform(2.0, 5.0))
-            print(
-                f"\n--- Processing video {i+1} of {len(video_entries)} ---", flush=True
-            )
+    if is_youtube_url:
+        is_playlist = "playlist?list=" in args.url and "watch?v=" not in args.url
+        if is_playlist:
+            ydl_opts = {"quiet": True, "extract_flat": True}
+            print(" -> Playlist URL detected. Fetching playlist entries...", flush=True)
             try:
-                video_url = entry.get("url")
-                if not video_url:
-                    continue
-                with YoutubeDL({"quiet": True, "noplaylist": True}) as ydl_video:
-                    video_details = ydl_video.extract_info(video_url, download=False)
-                enriched_data = process_video(video_details, ai_model)
-                save_video_to_db(db_conn, enriched_data, playlist_id)
+                with YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(args.url, download=False)
             except Exception as e:
                 print(
-                    f"ERROR processing video {entry.get('url')}: {e}",
+                    f"FATAL: yt-dlp failed to extract playlist info: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                db_conn.close()
+                sys.exit(1)
+
+            playlist_title = info_dict.get("title", "Untitled Playlist")
+            playlist_url = info_dict.get("webpage_url")
+            playlist_uploader = info_dict.get("uploader")
+            video_count = info_dict.get("playlist_count")
+
+            cursor = db_conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO playlists (title, url, uploader, video_count, processed_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    playlist_title,
+                    playlist_url,
+                    playlist_uploader,
+                    video_count,
+                    datetime.now(),
+                ),
+            )
+            db_conn.commit()
+            playlist_id = cursor.lastrowid
+            print(
+                f" -> Created/Updated playlist entry with ID: {playlist_id}", flush=True
+            )
+
+            video_entries = info_dict.get("entries", [])
+            for i, entry in enumerate(video_entries):
+                if i > 0:
+                    time.sleep(random.uniform(2.0, 5.0))
+                print(
+                    f"\n--- Processing video {i+1} of {len(video_entries)} ---",
+                    flush=True,
+                )
+                try:
+                    video_url = entry.get("url")
+                    if not video_url:
+                        continue
+                    with YoutubeDL({"quiet": True, "noplaylist": True}) as ydl_video:
+                        video_details = ydl_video.extract_info(
+                            video_url, download=False
+                        )
+                    enriched_data = process_video(video_details, ai_model)
+                    save_video_to_db(db_conn, enriched_data, playlist_id)
+                except Exception as e:
+                    print(
+                        f"ERROR processing video {entry.get('url')}: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        else:
+            ydl_opts = {"quiet": True, "noplaylist": True}
+            print(f" -> Single video URL detected. Fetching details...", flush=True)
+            try:
+                with YoutubeDL(ydl_opts) as ydl_video:
+                    video_details = ydl_video.extract_info(args.url, download=False)
+
+                canonical_url = video_details.get("webpage_url")
+                cursor = db_conn.cursor()
+                cursor.execute(
+                    "SELECT playlist_id FROM videos WHERE url = ?", (canonical_url,)
+                )
+                existing_record = cursor.fetchone()
+                existing_playlist_id = existing_record[0] if existing_record else None
+
+                if existing_playlist_id:
+                    print(
+                        f" -> Video already exists in playlist ID: {existing_playlist_id}. Updating in place.",
+                        flush=True,
+                    )
+
+                enriched_data = process_video(video_details, ai_model)
+                save_video_to_db(
+                    db_conn, enriched_data, playlist_id=existing_playlist_id
+                )
+            except Exception as e:
+                print(
+                    f"ERROR processing single video {args.url}: {e}",
                     file=sys.stderr,
                     flush=True,
                 )
     else:
-        ydl_opts = {"quiet": True, "noplaylist": True}
-        print(f" -> Single video URL detected. Fetching details...", flush=True)
-        try:
-            with YoutubeDL(ydl_opts) as ydl_video:
-                video_details = ydl_video.extract_info(args.url, download=False)
-
-            canonical_url = video_details.get("webpage_url")
-            cursor = db_conn.cursor()
-            cursor.execute(
-                "SELECT playlist_id FROM videos WHERE url = ?", (canonical_url,)
-            )
-            existing_record = cursor.fetchone()
-            existing_playlist_id = existing_record[0] if existing_record else None
-
-            if existing_playlist_id:
-                print(
-                    f" -> Video already exists in playlist ID: {existing_playlist_id}. Updating in place.",
-                    flush=True,
-                )
-
-            enriched_data = process_video(video_details, ai_model)
-            save_video_to_db(db_conn, enriched_data, playlist_id=existing_playlist_id)
-        except Exception as e:
-            print(
-                f"ERROR processing single video {args.url}: {e}",
-                file=sys.stderr,
-                flush=True,
-            )
+        # Process as a generic webpage
+        enriched_data = process_webpage(args.url, ai_model)
+        if enriched_data:
+            save_video_to_db(db_conn, enriched_data)
 
     db_conn.close()
     print("\n--- Enrichment Script Finished ---", flush=True)
