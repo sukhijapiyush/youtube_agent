@@ -6,13 +6,23 @@ import sqlite3
 from threading import Thread
 import queue
 import os
+from werkzeug.utils import secure_filename
 import config
-import time
+from flask import send_from_directory
+
 
 log_queue = queue.Queue()
 LOCK_FILE = "enrichment.lock"
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+
+@app.route("/uploads/<path:filename>")
+def uploaded_file(filename):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
 
 # --- Database & Batch File Functions ---
@@ -63,20 +73,29 @@ def load_batch_links():
 
 
 # --- Backend Enrichment Task ---
-def run_enrichment_process(urls):
+def run_enrichment_process(items_to_process):
+    """
+    Runs the enricher.py script for a list of URLs or file paths.
+    """
     global log_queue
     with open(LOCK_FILE, "w") as f:
         f.write("running")
 
-    log_queue.put(f"Starting batch process for {len(urls)} item(s)...")
+    log_queue.put(f"Starting batch process for {len(items_to_process)} item(s)...")
     try:
         process_env = os.environ.copy()
         process_env["PYTHONIOENCODING"] = "utf-8"
 
-        for i, url in enumerate(urls):
-            log_queue.put(f"\n--- Processing item {i+1} of {len(urls)}: {url} ---")
+        for i, item in enumerate(items_to_process):
+            log_queue.put(
+                f"\n--- Processing item {i+1} of {len(items_to_process)}: {os.path.basename(item)} ---"
+            )
+
+            # Determine if item is a URL or a file path
+            arg_type = "--url" if item.startswith("http") else "--file"
+
             process = subprocess.Popen(
-                [sys.executable, config.ENRICHER_SCRIPT_PATH, url],
+                [sys.executable, config.ENRICHER_SCRIPT_PATH, arg_type, item],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -182,6 +201,24 @@ def add_batch_links():
     except Exception as e:
         print(f"Error appending to batch_links.txt: {e}")
         return jsonify({"error": "Could not write to batch file."}), 500
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_file():
+    if os.path.exists(LOCK_FILE):
+        return jsonify({"error": "A process is already running."}), 409
+    if "file" not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+    if file:
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file.save(filepath)
+
+        Thread(target=run_enrichment_process, args=([filepath],)).start()
+        return jsonify({"message": "File upload successful, enrichment started."}), 202
 
 
 @app.route("/api/batch/start", methods=["POST"])

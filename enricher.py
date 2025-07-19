@@ -21,6 +21,7 @@ import time
 import random
 from constants import API_KEY
 import re
+import fitz
 import os
 
 
@@ -392,120 +393,200 @@ def process_webpage(url: str, ai_model: str) -> dict:
         return None
 
 
+def get_text_from_pdf(file_path: str) -> str:
+    """Extracts all text from a given PDF file."""
+    try:
+        doc = fitz.open(file_path)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        print(
+            f"      -> Successfully extracted text from PDF: {os.path.basename(file_path)}",
+            flush=True,
+        )
+        return text
+    except Exception as e:
+        print(
+            f"      -> ERROR extracting text from PDF: {e}", file=sys.stderr, flush=True
+        )
+        return ""
+
+
+def process_file(file_path: str, ai_model: str) -> dict:
+    """Processes a local file (e.g., PDF) for enrichment."""
+    filename = os.path.basename(file_path)
+    print(
+        f"PROCESSING_URL::{filename}", flush=True
+    )  # Use filename as a unique identifier
+    print(f"\nSTEP 3: Processing File: '{filename}'", flush=True)
+
+    text_content = ""
+    if filename.lower().endswith(".pdf"):
+        text_content = get_text_from_pdf(file_path)
+    # Add more file types here (e.g., .txt, .md) as needed
+    # elif filename.lower().endswith('.txt'):
+    #     with open(file_path, 'r', encoding='utf-8') as f:
+    #         text_content = f.read()
+    else:
+        print(f"Unsupported file type: {filename}", file=sys.stderr, flush=True)
+        return None
+
+    if not text_content:
+        print(
+            "No text content could be extracted from the file.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+    enriched_data = get_enriched_data_from_gemini(
+        title=filename,
+        description="This is a pdf file",
+        transcript=text_content[:4000],
+        model_name=ai_model,
+    )
+
+    return {
+        "name": filename,
+        "url": file_path,
+        "type": "file",
+        "summary": enriched_data["summary"],
+        "tags": enriched_data["tags"],
+        "category": enriched_data["category"],
+        "thumbnail_url": None,
+        "uploader": "Local File",
+        "duration": None,
+    }
+
+
 # --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("url")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--url", help="A YouTube or webpage URL to process.")
+    group.add_argument("--file", help="The path to a local file to process.")
     parser.add_argument("--model", default="gemini-2.5-flash-lite-preview-06-17")
     args = parser.parse_args()
 
     ai_model = args.model
-    print(
-        f"--- YouTube Data Enrichment Script Started (Using Model: {ai_model}) ---",
-        flush=True,
-    )
+    print(f"--- Enrichment Script Started (Model: {ai_model}) ---", flush=True)
 
     db_conn = setup_database()
-    print(f"\nSTEP 2: Fetching metadata for URL: {args.url}", flush=True)
-    is_youtube_url = "youtube.com" in args.url or "youtu.be" in args.url
 
-    if is_youtube_url:
-        is_playlist = "playlist?list=" in args.url and "watch?v=" not in args.url
-        if is_playlist:
-            ydl_opts = {"quiet": True, "extract_flat": True}
-            print(" -> Playlist URL detected. Fetching playlist entries...", flush=True)
-            try:
-                with YoutubeDL(ydl_opts) as ydl:
-                    info_dict = ydl.extract_info(args.url, download=False)
-            except Exception as e:
+    if args.url:
+        print(f"\nSTEP 2: Fetching metadata for URL: {args.url}", flush=True)
+        is_youtube_url = "youtube.com" in args.url or "youtu.be" in args.url
+
+        if is_youtube_url:
+            is_playlist = "playlist?list=" in args.url and "watch?v=" not in args.url
+            if is_playlist:
+                ydl_opts = {"quiet": True, "extract_flat": True}
                 print(
-                    f"FATAL: yt-dlp failed to extract playlist info: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                db_conn.close()
-                sys.exit(1)
-
-            playlist_title = info_dict.get("title", "Untitled Playlist")
-            playlist_url = info_dict.get("webpage_url")
-            playlist_uploader = info_dict.get("uploader")
-            video_count = info_dict.get("playlist_count")
-
-            cursor = db_conn.cursor()
-            cursor.execute(
-                "INSERT OR REPLACE INTO playlists (title, url, uploader, video_count, processed_at) VALUES (?, ?, ?, ?, ?)",
-                (
-                    playlist_title,
-                    playlist_url,
-                    playlist_uploader,
-                    video_count,
-                    datetime.now(),
-                ),
-            )
-            db_conn.commit()
-            playlist_id = cursor.lastrowid
-            print(
-                f" -> Created/Updated playlist entry with ID: {playlist_id}", flush=True
-            )
-
-            video_entries = info_dict.get("entries", [])
-            for i, entry in enumerate(video_entries):
-                if i > 0:
-                    time.sleep(random.uniform(2.0, 5.0))
-                print(
-                    f"\n--- Processing video {i+1} of {len(video_entries)} ---",
+                    " -> Playlist URL detected. Fetching playlist entries...",
                     flush=True,
                 )
                 try:
-                    video_url = entry.get("url")
-                    if not video_url:
-                        continue
-                    with YoutubeDL({"quiet": True, "noplaylist": True}) as ydl_video:
-                        video_details = ydl_video.extract_info(
-                            video_url, download=False
-                        )
-                    enriched_data = process_video(video_details, ai_model)
-                    save_video_to_db(db_conn, enriched_data, playlist_id)
+                    with YoutubeDL(ydl_opts) as ydl:
+                        info_dict = ydl.extract_info(args.url, download=False)
                 except Exception as e:
                     print(
-                        f"ERROR processing video {entry.get('url')}: {e}",
+                        f"FATAL: yt-dlp failed to extract playlist info: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    db_conn.close()
+                    sys.exit(1)
+
+                playlist_title = info_dict.get("title", "Untitled Playlist")
+                playlist_url = info_dict.get("webpage_url")
+                playlist_uploader = info_dict.get("uploader")
+                video_count = info_dict.get("playlist_count")
+
+                cursor = db_conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO playlists (title, url, uploader, video_count, processed_at) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        playlist_title,
+                        playlist_url,
+                        playlist_uploader,
+                        video_count,
+                        datetime.now(),
+                    ),
+                )
+                db_conn.commit()
+                playlist_id = cursor.lastrowid
+                print(
+                    f" -> Created/Updated playlist entry with ID: {playlist_id}",
+                    flush=True,
+                )
+
+                video_entries = info_dict.get("entries", [])
+                for i, entry in enumerate(video_entries):
+                    if i > 0:
+                        time.sleep(random.uniform(2.0, 5.0))
+                    print(
+                        f"\n--- Processing video {i+1} of {len(video_entries)} ---",
+                        flush=True,
+                    )
+                    try:
+                        video_url = entry.get("url")
+                        if not video_url:
+                            continue
+                        with YoutubeDL(
+                            {"quiet": True, "noplaylist": True}
+                        ) as ydl_video:
+                            video_details = ydl_video.extract_info(
+                                video_url, download=False
+                            )
+                        enriched_data = process_video(video_details, ai_model)
+                        save_video_to_db(db_conn, enriched_data, playlist_id)
+                    except Exception as e:
+                        print(
+                            f"ERROR processing video {entry.get('url')}: {e}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+            else:
+                ydl_opts = {"quiet": True, "noplaylist": True}
+                print(f" -> Single video URL detected. Fetching details...", flush=True)
+                try:
+                    with YoutubeDL(ydl_opts) as ydl_video:
+                        video_details = ydl_video.extract_info(args.url, download=False)
+
+                    canonical_url = video_details.get("webpage_url")
+                    cursor = db_conn.cursor()
+                    cursor.execute(
+                        "SELECT playlist_id FROM videos WHERE url = ?", (canonical_url,)
+                    )
+                    existing_record = cursor.fetchone()
+                    existing_playlist_id = (
+                        existing_record[0] if existing_record else None
+                    )
+
+                    if existing_playlist_id:
+                        print(
+                            f" -> Video already exists in playlist ID: {existing_playlist_id}. Updating in place.",
+                            flush=True,
+                        )
+
+                    enriched_data = process_video(video_details, ai_model)
+                    save_video_to_db(
+                        db_conn, enriched_data, playlist_id=existing_playlist_id
+                    )
+                except Exception as e:
+                    print(
+                        f"ERROR processing single video {args.url}: {e}",
                         file=sys.stderr,
                         flush=True,
                     )
         else:
-            ydl_opts = {"quiet": True, "noplaylist": True}
-            print(f" -> Single video URL detected. Fetching details...", flush=True)
-            try:
-                with YoutubeDL(ydl_opts) as ydl_video:
-                    video_details = ydl_video.extract_info(args.url, download=False)
-
-                canonical_url = video_details.get("webpage_url")
-                cursor = db_conn.cursor()
-                cursor.execute(
-                    "SELECT playlist_id FROM videos WHERE url = ?", (canonical_url,)
-                )
-                existing_record = cursor.fetchone()
-                existing_playlist_id = existing_record[0] if existing_record else None
-
-                if existing_playlist_id:
-                    print(
-                        f" -> Video already exists in playlist ID: {existing_playlist_id}. Updating in place.",
-                        flush=True,
-                    )
-
-                enriched_data = process_video(video_details, ai_model)
-                save_video_to_db(
-                    db_conn, enriched_data, playlist_id=existing_playlist_id
-                )
-            except Exception as e:
-                print(
-                    f"ERROR processing single video {args.url}: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-    else:
-        # Process as a generic webpage
-        enriched_data = process_webpage(args.url, ai_model)
+            # Process as a generic webpage
+            enriched_data = process_webpage(args.url, ai_model)
+            if enriched_data:
+                save_video_to_db(db_conn, enriched_data)
+    elif args.file:
+        # File processing logic
+        enriched_data = process_file(args.file, ai_model)
         if enriched_data:
             save_video_to_db(db_conn, enriched_data)
 
