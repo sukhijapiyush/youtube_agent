@@ -382,6 +382,17 @@
         return ['All', ...uniqueCategories.sort()];
       }, [library]);
 
+      const libraryStats = useMemo(() => {
+        const allVideos = library.flatMap(item => item.type === 'playlist' ? item.videos : (item.type === 'video' ? item : []));
+        const totalDuration = allVideos.reduce((acc, video) => acc + (video.duration || 0), 0);
+        const hours = Math.floor(totalDuration / 3600);
+        const minutes = Math.floor((totalDuration % 3600) / 60);
+        return {
+          videoCount: allVideos.length,
+          totalWatchTime: `${hours}h ${minutes}m`
+        };
+      }, [library]);
+
       const filteredAndSortedLibrary = useMemo(() => {
         const query = actionInput.toLowerCase();
         let isUrl = false;
@@ -440,6 +451,7 @@
                   <div className="flex items-center space-x-4 mt-4">
                     <select onChange={e => setSortOrder(e.target.value)} value={sortOrder} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"><option value="processed_at_desc">Sort: Newest First</option><option value="processed_at_asc">Sort: Oldest First</option><option value="name_asc">Sort: Title (A-Z)</option><option value="name_desc">Sort: Title (Z-A)</option><option value="duration_desc">Sort: Duration (Longest)</option><option value="duration_asc">Sort: Duration (Shortest)</option></select>
                     <select onChange={e => setActiveCategory(e.target.value)} value={activeCategory} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm">{categories.map(cat => <option key={cat} value={cat}>{cat === 'All' ? 'Filter by Category' : cat}</option>)}</select>
+                    <div className="flex items-center space-x-4 text-sm text-gray-600"><span className="font-semibold">Videos: {libraryStats.videoCount}</span><span className="font-semibold">Total Watch Time: {libraryStats.totalWatchTime}</span></div>
                   </div>
                 </div>
               </header>

@@ -386,7 +386,7 @@ def process_webpage(url: str, ai_model: str) -> dict:
             "category": enriched_data["category"],
             "thumbnail_url": None,
             "uploader": None,
-            "duration": None,
+            "duration": 100000000,
         }
     except Exception as e:
         print(f"ERROR processing webpage {url}: {e}", file=sys.stderr, flush=True)
@@ -455,7 +455,7 @@ def process_file(file_path: str, ai_model: str) -> dict:
         "category": enriched_data["category"],
         "thumbnail_url": None,
         "uploader": "Local File",
-        "duration": None,
+        "duration": 100000000,
     }
 
 
