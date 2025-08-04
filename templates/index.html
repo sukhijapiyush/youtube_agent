@@ -41,6 +41,18 @@
     const { useState, useEffect, useCallback, useMemo, useRef, StrictMode } = React;
 
     // --- Helper Components ---
+    // Format seconds to h m s (e.g., 1h 23m 45s)
+    const formatDuration = (seconds) => {
+      if (!seconds || isNaN(seconds)) return '';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      return [
+        h ? `${h}h` : null,
+        m ? `${m}m` : (h ? '0m' : null),
+        s ? `${s}s` : (h || m ? '0s' : null)
+      ].filter(Boolean).join(' ');
+    };
     const Icon = ({ name, className }) => {
       const icons = {
         logo: <path d="M15.5,1h-7A6.5,6.5,0,0,0,2,7.5v7A6.5,6.5,0,0,0,8.5,21h7A6.5,6.5,0,0,0,22,14.5v-7A6.5,6.5,0,0,0,15.5,1Zm-5,15a5,5,0,1,1,5-5A5,5,0,0,1,10.5,16Zm6-6.5A1.5,1.5,0,1,1,18,8,1.5,1.5,0,0,1,16.5,9.5Z" />,
@@ -149,7 +161,13 @@
         )}
         <div className="flex-grow overflow-hidden">
           <a href={item.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-base cursor-pointer hover:text-indigo-600" title={item.name} onClick={(e) => { if (item.type === 'video') { e.preventDefault(); onView(item); } }}>{item.name}</a>
-          <div className="flex items-center space-x-2 text-sm text-gray-500 my-1.5"><span>by {item.uploader || 'Webpage'}</span>{item.category && <span className="font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">{item.category}</span>}</div>
+          <div className="flex items-center space-x-2 text-sm text-gray-500 my-1.5">
+            <span>by {item.uploader || 'Webpage'}</span>
+            {item.category && <span className="font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">{item.category}</span>}
+            {item.type === 'video' && item.duration > 0 && (
+              <span className="ml-2 text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">{formatDuration(item.duration)}</span>
+            )}
+          </div>
           <p className="text-sm text-gray-600 mb-3">{item.summary || 'No summary.'}</p>
           <div className="flex flex-wrap items-center gap-2">{item.tags && item.tags.split(',').map((tag, index) => <span key={`${item.id}-${tag.trim()}-${index}`} className="text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full">{tag.trim()}</span>)}</div>
         </div>
@@ -384,11 +402,13 @@
 
       const libraryStats = useMemo(() => {
         const allVideos = library.flatMap(item => item.type === 'playlist' ? item.videos : (item.type === 'video' ? item : []));
+        const allItems = library.flatMap(item => item.type === 'playlist' ? item.videos : item);
         const totalDuration = allVideos.reduce((acc, video) => acc + (video.duration || 0), 0);
         const hours = Math.floor(totalDuration / 3600);
         const minutes = Math.floor((totalDuration % 3600) / 60);
         return {
           videoCount: allVideos.length,
+          itemCount: allItems.length,
           totalWatchTime: `${hours}h ${minutes}m`
         };
       }, [library]);
@@ -451,7 +471,11 @@
                   <div className="flex items-center space-x-4 mt-4">
                     <select onChange={e => setSortOrder(e.target.value)} value={sortOrder} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"><option value="processed_at_desc">Sort: Newest First</option><option value="processed_at_asc">Sort: Oldest First</option><option value="name_asc">Sort: Title (A-Z)</option><option value="name_desc">Sort: Title (Z-A)</option><option value="duration_desc">Sort: Duration (Longest)</option><option value="duration_asc">Sort: Duration (Shortest)</option></select>
                     <select onChange={e => setActiveCategory(e.target.value)} value={activeCategory} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm">{categories.map(cat => <option key={cat} value={cat}>{cat === 'All' ? 'Filter by Category' : cat}</option>)}</select>
-                    <div className="flex items-center space-x-4 text-sm text-gray-600"><span className="font-semibold">Videos: {libraryStats.videoCount}</span><span className="font-semibold">Total Watch Time: {libraryStats.totalWatchTime}</span></div>
+                    <div className="flex items-center space-x-4 text-sm text-gray-600">
+                      <span className="font-semibold">Videos: {libraryStats.videoCount}</span>
+                      <span className="font-semibold">Items: {libraryStats.itemCount}</span>
+                      <span className="font-semibold">Total Watch Time: {libraryStats.totalWatchTime}</span>
+                    </div>
                   </div>
                 </div>
               </header>
